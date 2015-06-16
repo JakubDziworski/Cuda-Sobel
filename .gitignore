@@ -1,0 +1,6 @@
+*.opensdf
+*.sdf
+*.tlog
+*.lastbuildstate
+*.deps
+*.idb
