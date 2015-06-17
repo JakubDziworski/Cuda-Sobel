@@ -14,11 +14,6 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
 	}
 }
 
-
-#define PRIMARY_THRESHOLD 125
-#define SECONDARY_THRESHOLD 75
-
-
 __device__ int sobel(int a, int b, int c, int d, int e, int f) {
 	return ((a + 2 * b + c) - (d + 2 * e + f));
 }
@@ -29,12 +24,10 @@ __device__ int getindexForPixelAt(unsigned char *pixels, int x, int y, int width
 	const int max = width*height * 4-1;
 	if (val < 0)
 	{
-		//printf("\nx %d: y %d: below 0",x,y);
 		return 0;
 	}
 	if (val > max)
 	{
-		//printf("\nx %d: y %d : above max", x, y);
 		return max;
 	}
 	return val;
@@ -48,7 +41,7 @@ __device__ float4 pixelAt(unsigned char *pixels, int x, int y, int width,int hei
 
 
 
-__global__ void addKernel(unsigned char *pixels,int width,int height)
+__global__ void sobelKernel(unsigned char *pixels,unsigned char *originalPixels,int width,int height)
 {
 	int id = blockIdx.x*blockDim.x+ threadIdx.x;
 	int x = threadIdx.x + blockIdx.x * blockDim.x;
@@ -56,15 +49,18 @@ __global__ void addKernel(unsigned char *pixels,int width,int height)
 
 	if (y >= height-1 || x >= width-1) return;
 		float4 x0, x1, x2, x3, x4, x5, x6, x7, x8;
-		x0 = pixelAt(pixels, x - 1, y - 1, width,height);
-		x1 = pixelAt(pixels, x, y - 1, width, height);
-		x2 = pixelAt(pixels, x + 1, y, width, height);
-		x3 = pixelAt(pixels, x - 1, y, width, height);
-		x4 = pixelAt(pixels, x, y, width, height);
-		x5 = pixelAt(pixels, x + 1, y, width, height);
-		x6 = pixelAt(pixels, x - 1, y + 1, width, height);
-		x7 = pixelAt(pixels, x, y + 1, width, height);
-		x8 = pixelAt(pixels, x + 1, y + 1, width, height);
+		//gora
+		x0 = pixelAt(originalPixels, x - 1, y - 1, width, height);
+		x1 = pixelAt(originalPixels, x, y - 1, width, height);
+		x2 = pixelAt(originalPixels, x + 1, y - 1, width, height);
+		//srodek
+		x3 = pixelAt(originalPixels, x - 1, y, width, height);
+		x4 = pixelAt(originalPixels, x, y, width, height);
+		x5 = pixelAt(originalPixels, x + 1, y, width, height);
+		//dol
+		x6 = pixelAt(originalPixels, x - 1, y + 1, width, height);
+		x7 = pixelAt(originalPixels, x, y + 1, width, height);
+		x8 = pixelAt(originalPixels, x + 1, y + 1, width, height);
 
 		int dfdy_r = sobel(x6.x, x7.x, x8.x, x0.x, x1.x, x2.x);
 		int dfdx_r = sobel(x2.x, x5.x, x8.x, x0.x, x3.x, x6.x);
@@ -79,31 +75,17 @@ __global__ void addKernel(unsigned char *pixels,int width,int height)
 		int gradient_g = abs(dfdy_g) + abs(dfdx_g);
 		int gradient_b = abs(dfdy_b) + abs(dfdx_b);
 
-		float mean_gradient = (gradient_r + gradient_g + gradient_b) / 3.0f;
-		unsigned char edge = (mean_gradient > PRIMARY_THRESHOLD);
-		unsigned char slight_edge = (mean_gradient > SECONDARY_THRESHOLD);
+		float gradient = (gradient_r + gradient_g + gradient_b) / 3.0f;
 
-		float4 new_pixel = float4{ 0, 0, 0, 255 };
-
-		new_pixel.x = 255 * edge | 125 * slight_edge;
-		new_pixel.y = 255 * edge | 125 * slight_edge;
-		new_pixel.z = 255 * edge | 125 * slight_edge;
-
+		float4 new_pixel = float4{ gradient, gradient, gradient, 255 };
 		
-		int pos = getindexForPixelAt(pixels, x, y, width, height);
-
-
-		/*if (pixels[pos] == NULL || pixels[pos + 1] == NULL || pixels[pos + 2] == NULL) {
-			printf("ERROR pos = %d, x = %d %y = %d");
-		}*/
-
-
+		int pos = getindexForPixelAt(originalPixels, x, y, width, height);
 		pixels[pos] = new_pixel.x;
 		pixels[pos + 1] = new_pixel.y;
 		pixels[pos + 2] = new_pixel.z;
 }
 
-extern "C" void initFilter(unsigned char *pixels, int width, int height)
+extern "C" void sobelFilter(unsigned char *pixels, int width, int height)
 {
 	const unsigned int size = width*height*4;
 
@@ -111,20 +93,24 @@ extern "C" void initFilter(unsigned char *pixels, int width, int height)
 	cudaMalloc(&d_pixels, size);
 	cudaMemcpy(d_pixels, pixels, size, cudaMemcpyHostToDevice);
 
+	unsigned char *d_original_pixels;
+	cudaMalloc(&d_original_pixels, size);
+	cudaMemcpy(d_original_pixels, pixels,size, cudaMemcpyHostToDevice);
 
-	const int blockDim = 4;
+	const int blockDim = 16;
 	dim3 threads(blockDim, blockDim);
-	dim3 blocks(width / blockDim + 1, height / blockDim + 1);
-
+	dim3 blocks(width / blockDim, height / blockDim);
 	printf("\nthreads in block = %d,blocks = %d", threads.x*threads.y, blocks.x*blocks.y);
-	addKernel << < blocks, threads >> >(d_pixels, width, height);
+
+	sobelKernel << < blocks, threads >> >(d_pixels, d_original_pixels, width, height);
 	if (cudaSuccess != cudaGetLastError())
 	{
-		printf("kernel error %s", cudaGetLastError());
+		printf("\nKernel error %s", cudaGetLastError());
 	}
-	printf("\nsizeof size = %d sizeof dev =%d ", sizeof(*d_pixels), sizeof(*pixels));
+
 	gpuErrchk(cudaMemcpy(pixels, d_pixels, size, cudaMemcpyDeviceToHost));
 	
+	cudaFree(d_original_pixels);
 	cudaFree(d_pixels);
 }
 
