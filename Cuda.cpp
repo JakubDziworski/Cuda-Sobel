@@ -1,14 +1,8 @@
 ﻿
-#include <windows.h>
-#include <glew.h>
 #include <freeglut.h>
-#include <cuda_runtime.h>
-#include <cuda_gl_interop.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <SOIL.h>
-#include <string>
 #include <cuda.h>
+#include <stdlib.h>
+#include <string>
 #include "utils.h"
 
 extern "C" void sobelFilter(unsigned char *pixels, int width, int height);
